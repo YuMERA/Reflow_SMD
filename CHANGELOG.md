@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.2] - 2026-11-14
+
+### Novo
+- Signal kada se dostigne zadata temperatura (SET ±2 °C): 3 kratka pištanja, čuju se i kada je BEEP OFF.
+- Tajmer od trenutka dostizanja temperature u gornjem redu ekrana (`m:ss`); promena SET vrednosti ga resetuje.
+- Brzi izbor temperature: dug pritisak (0,8 s) na SET prelazi na sledeću vrednost iz `PRESET_TEMPS` (150 / 180 / 220 / 240 °C).
+
+### Ispravke
+- Taster enkodera radi na ivicu: kratak pritisak se izvršava na puštanje, a držanje tastera više ne ponavlja
+  akciju na svakih 250 ms (ranije je držanje na START/STOP uključivalo i isključivalo proces).
+
 ## [1.1] - 2026-11-14
 
 ### Bezbednost

@@ -2,7 +2,12 @@
  * SMD Reflow - PID regulator temperature za grejac pegle (800 W) preko SSR-a
  * Hardver: ESP32, MAX6675 + termopar tip K, SH1106 OLED 128x64, rotacioni enkoder, buzzer, SSR
  *
- * Verzija: 1.1
+ * Verzija: 1.2
+ *  - Signal (3 kratka pistanja) i tajmer na ekranu kada se dostigne zadata temperatura
+ *  - Brzi izbor temperature: dug pritisak na SET -> 150 / 180 / 220 / 240 C
+ *  - Taster: kratak pritisak na pustanje, dug pritisak 0,8 s; drzanje vise ne ponavlja akciju
+ *
+ * Verzija 1.1:
  *  - Bezbednost: otkaz senzora (NAN / nemoguca vrednost) odmah gasi grejac i zaustavlja proces
  *  - Bezbednost: apsolutna granica temperature (MAX_SAFE_TEMP), proverava se i kada proces ne radi
  *  - Bezbednost: provera rasta temperature (grejac pun, a temperatura ne raste -> FAULT)
@@ -21,7 +26,7 @@
 #include <PID_v1.h>
 #include "mera_logo.h"
 
-#define FW_VERSION "1.1"
+#define FW_VERSION "1.2"
 
 // ---------------------------------------------------------------------------
 // OLED
@@ -114,8 +119,20 @@ const int MAX_SET_TEMP = 250; // mora biti dovoljno ispod MAX_SAFE_TEMP
 bool editingTemperature = false;
 bool editingBeep = true;
 bool isReflowRunning = false;
-unsigned long lastButtonPressTime = 0;
-const unsigned long debounceDelay = 250;
+
+// Taster enkodera: kratak pritisak (na pustanje) i dug pritisak
+const unsigned long debounceDelay = 50;    // ms
+const unsigned long longPressTime = 800;   // ms
+
+// Brzi izbor temperature: dug pritisak na SET prelazi na sledecu vrednost
+const int PRESET_TEMPS[] = {150, 180, 220, 240};
+const int PRESET_COUNT = sizeof(PRESET_TEMPS) / sizeof(PRESET_TEMPS[0]);
+
+// Signal "temperatura dostignuta" + tajmer
+const float READY_BAND = 2.0;   // C - temperatura je "dostignuta" kada je u opsegu SET +/- READY_BAND
+bool  setpointReached = false;
+unsigned long reachedTime = 0;
+int   readySetpoint = -1;       // za koju zadatu temperaturu vazi setpointReached
 
 // ---------------------------------------------------------------------------
 // Temperatura
@@ -165,6 +182,36 @@ void alarmBeep() {
     delay(400);
   }
   noTone(BUZZER_PIN);
+}
+
+// Signal da je zadata temperatura dostignuta - cuje se uvek, bez obzira na BEEP podesavanje
+void readyBeep() {
+  for (int i = 0; i < 3; i++) {
+    tone(BUZZER_PIN, 4500, 80);
+    delay(150);
+  }
+  noTone(BUZZER_PIN);
+}
+
+// Prati da li je temperatura dostignuta; kod prvog ulaska u opseg pusta signal i pokrece tajmer.
+// Promena zadate temperature resetuje i signal i tajmer.
+void checkSetpointReached() {
+  if (!isReflowRunning) {
+    setpointReached = false;
+    readySetpoint = -1;
+    return;
+  }
+  if (readySetpoint != desiredTemperature) {
+    readySetpoint = desiredTemperature;
+    setpointReached = false;
+  }
+  if (!setpointReached && fabs(currentTempC - desiredTemperature) <= READY_BAND) {
+    setpointReached = true;
+    reachedTime = millis();
+    Serial.print("# Setpoint reached: ");
+    Serial.println(desiredTemperature);
+    readyBeep();
+  }
 }
 
 // Jedino mesto gde se SSR ukljucuje. Grejac moze da radi SAMO ako proces radi,
@@ -227,6 +274,8 @@ bool startProcess() {
   windowStartTime = millis(); // PWM prozor krece od sada
   processStartTime = millis();
   noRiseTracking = false;
+  setpointReached = false;
+  readySetpoint = -1;
   isReflowRunning = true;
   Serial.println("# time_s,temp_c,setpoint_c,output_pct");
   return true;
@@ -303,6 +352,7 @@ void readTemperature() {
       return;
     }
     checkHeatRise();
+    if (activeFault == FAULT_NONE) checkSetpointReached();
   }
 }
 
@@ -405,11 +455,66 @@ void handleEncoder() {
   }
 }
 
-void handleButton() {
-  bool buttonPressed = (digitalRead(ENCODER_SW_PIN) == LOW);
-  if (!buttonPressed || (millis() - lastButtonPressTime <= debounceDelay)) return;
-  lastButtonPressTime = millis();
+// Dug pritisak na SET: sledeca brza vrednost temperature (vece od trenutne, ili prva u listi)
+void selectNextPreset() {
+  int next = PRESET_TEMPS[0];
+  for (int i = 0; i < PRESET_COUNT; i++) {
+    if (PRESET_TEMPS[i] > desiredTemperature) { next = PRESET_TEMPS[i]; break; }
+  }
+  desiredTemperature = next;
+  editingTemperature = false;
+  updatePIDTunings();
+  Serial.print("# Preset selected: ");
+  Serial.println(desiredTemperature);
+  if (editingBeep) {
+    tone(BUZZER_PIN, 4000, 50); delay(80);
+    tone(BUZZER_PIN, 4000, 50);
+    noTone(BUZZER_PIN);
+  }
+}
 
+void onShortPress();
+
+void onLongPress() {
+  if (activeFault != FAULT_NONE) { onShortPress(); return; }
+  if (menuIndex == 0) {
+    selectNextPreset();
+  } else {
+    onShortPress(); // na ostalim stavkama dug pritisak radi isto sto i kratak
+  }
+}
+
+// Taster: kratak pritisak se izvrsava na pustanje, dug pritisak cim se drzi longPressTime.
+// Drzanje tastera vise ne ponavlja akciju (u v1.0 se akcija ponavljala na svakih 250 ms).
+void handleButton() {
+  static bool isDown = false;
+  static bool longFired = false;
+  static unsigned long pressStart = 0;
+  static unsigned long lastEdge = 0;
+
+  bool pressed = (digitalRead(ENCODER_SW_PIN) == LOW);
+  unsigned long now = millis();
+
+  if (pressed != isDown) {
+    if (now - lastEdge < debounceDelay) return;
+    lastEdge = now;
+    isDown = pressed;
+    if (pressed) {
+      pressStart = now;
+      longFired = false;
+    } else if (!longFired) {
+      onShortPress();
+    }
+    return;
+  }
+
+  if (isDown && !longFired && (now - pressStart >= longPressTime)) {
+    longFired = true;
+    onLongPress();
+  }
+}
+
+void onShortPress() {
   // Potvrda greske: brise se samo ako je senzor ponovo ispravan i temperatura ispod granice
   if (activeFault != FAULT_NONE) {
     if (sensorOk && currentTempC < MAX_SAFE_TEMP) {
@@ -529,6 +634,15 @@ void drawMainScreen() {
 
   if (!sensorOk) {
     u8g2.print("TEMP ERROR!");
+  } else if (isReflowRunning && setpointReached) {
+    // Temperatura dostignuta: prikaz temperature + vreme od dostizanja (m:ss)
+    u8g2.print(currentTempC, 1);
+    u8g2.print("°C");
+    unsigned long s = (millis() - reachedTime) / 1000;
+    char buf[12];
+    snprintf(buf, sizeof(buf), "T %lu:%02lu", s / 60, s % 60);
+    u8g2.setCursor(SCREEN_WIDTH - u8g2.getStrWidth(buf), 9);
+    u8g2.print(buf);
   } else {
     u8g2.print("Temp : ");
     u8g2.print(currentTempC);

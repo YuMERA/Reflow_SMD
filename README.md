@@ -26,6 +26,7 @@ Upravljanje: **ESP32** + **MAX6675** (termopar tip K) + **SSR**, sa OLED ekranom
 - Gain scheduling: Ki se automatski bira prema zadatoj temperaturi (≤160 °C / 161–180 °C / >180 °C)
 - OLED meni (SH1106 128×64): **SET** temperatura, **BEEP** zvuk ON/OFF, **START/STOP**
 - Prikaz trenutne snage grejača u % i LED indikator aktivnog zagrevanja
+- Signal i tajmer kada se dostigne zadata temperatura, brzi izbor 150 / 180 / 220 / 240 °C (v1.2)
 - **Zaštite (v1.1):** otkaz termopara, apsolutna granica temperature, provera rasta temperature, blokada START-a
 - CSV log na serijskom portu za praćenje i podešavanje PID-a
 
@@ -75,9 +76,13 @@ Okretanjem enkodera bira se stavka menija, pritiskom se aktivira:
 
 | Stavka | Akcija |
 |---|---|
-| **SET** | pritisak ulazi u izmenu (treperi `<<<`), okretanjem se menja temperatura 50–250 °C, ponovni pritisak potvrđuje |
-| **BEEP** | uključuje ili isključuje zvuk tastera (alarm se **uvek** čuje) |
+| **SET** | kratak pritisak ulazi u izmenu (treperi `<<<`), okretanjem se menja temperatura 50–250 °C, ponovni pritisak potvrđuje |
+| **SET**, dug pritisak (0,8 s) | brzi izbor: prelazi na sledeću vrednost **150 → 180 → 220 → 240 °C** (dva kratka pištanja) |
+| **BEEP** | uključuje ili isključuje zvuk tastera (alarm i signal dostignute temperature se **uvek** čuju) |
 | **START / STOP** | pokreće ili zaustavlja regulaciju; dok radi prikazuje snagu grejača u % |
+
+**Temperatura dostignuta:** kada temperatura prvi put uđe u opseg SET ±2 °C, čuju se **3 kratka pištanja**, a u gornjem redu ekrana se umesto `Temp :` prikazuje tajmer od tog trenutka (npr. `219.6°C   T 0:45`).
+Promena SET vrednosti resetuje signal i tajmer. Brze vrednosti se menjaju u nizu `PRESET_TEMPS` na vrhu `.ino` fajla.
 
 Ako senzor ne radi, na ekranu piše `TEMP ERROR!` i `START BLOCKED`, a proces ne može da se pokrene.
 
@@ -85,12 +90,13 @@ Ako senzor ne radi, na ekranu piše `TEMP ERROR!` i `START BLOCKED`, a proces ne
 
 Firmver v1.1 drži jednu temperaturu, pa se profil izvodi ručnom promenom SET vrednosti:
 
-1. **Predgrevanje / soak:** SET 150–160 °C, START, sačekati da se temperatura ustali i držati 60–90 s
-2. **Reflow:** SET 215–225 °C, sačekati da se lem rastopi, pa držati još 30–60 s
-3. **Hlađenje:** STOP i ostaviti ploču da se ohladi (ne pomerati je dok lem ne očvrsne)
+1. **Predgrevanje / soak:** dug pritisak na SET dok ne bude **150 °C**, START. Posle signala držati 60–90 s (tajmer na ekranu).
+2. **Reflow:** dug pritisak na SET dok ne bude **220 °C**. Posle signala sačekati da se lem rastopi i zasija, pa držati još 30–60 s.
+3. **Hlađenje:** skinuti PCB sa ploče i STOP (ne pomerati komponente dok lem ne očvrsne).
 
-Za bezolovni lem (SAC305) soak je 150–180 °C, a vrh 235–245 °C.
-Automatski profil je planiran za sledeću verziju.
+Za bezolovni lem (SAC305): soak 150–180 °C, vrh **240 °C**.
+
+Automatski reflow profil namerno nije urađen. Ploča od pegle ima veliku termičku masu, sporo se greje i hladi i ne može da prati profil rerne, pa je ručni rad uz signal i tajmer praktičniji.
 
 ## Bezbednost
 
@@ -136,7 +142,7 @@ Saveti za podešavanje: ako temperatura prebacuje zadatu vrednost, smanjite Ki i
 ## Struktura repozitorijuma
 
 ```
-Smd_Reflow_PID_Final.ino   aktuelni firmver (v1.1)
+Smd_Reflow_PID_Final.ino   aktuelni firmver (v1.2)
 mera_logo.h                logo za početni ekran
 CHANGELOG.md               istorija izmena
 docs/
